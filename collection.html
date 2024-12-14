@@ -1,0 +1,916 @@
+﻿<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="application-name" lang="ru" content="Персональный библиографический менеджер">
+<meta name="author" lang="ru" content="Игорь Сергеевич Орещенков">
+<meta name="copyright" lang="ru" content="Copyright © 2024 Игорь Сергеевич Орещенков">
+<meta name="license" lang="ru" content="Лицензия Apache License, Версия 2.0, см. http://www.apache.org/licenses/LICENSE-2.0">
+<meta name="date" content="2024-11-07T12:00:00+03:00">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Коллекция</title>
+<style>
+	* {margin: 0; padding: 0}
+        * {font-family: sans-serif}
+	#control {padding: 1ex 0; width: 100%; background: lightgray}
+	#picviewmode, #marks, #fldsearch, #picsearch, #piclist {vertical-align: middle}
+	#marks {display: inline-block; padding: 1ex 0}
+	#marks a {padding: 0.5em; background: lightgray; border: 2px solid black; border-radius: 1ex; padding: 0.5ex 0.5em; margin: 0 0.2em}
+	#marks a {color: black; font-weight: bold}
+	#marks a.selected {background: white}
+	#tags {margin: 0.5em 0; text-align: center}
+	#tags a {padding: 0.5ex 0.5em; background: lightgray; border: 2px solid black; border-radius: 1ex}
+	#tags a {line-height: 1.8em; color: black; font-weight: bold}
+	#tags a.selected {background: white}
+	#picviewmode {margin-right: 0.5em}
+	#picsearch {float: right; margin-left: 0.5em}
+        #piclist {float: right}
+	#fldsearch {float: right; padding: 0 0.5em; width: 40%; height: 2em}
+	#picviewmode span, #picsearch span {vertical-align: sub}
+        #page .selected {background: yellow}
+	#page table {width: 100%; border-spacing: 0; border: 1px solid black; border-bottom: 2px solid black}
+	#page td, th {border: 1px solid black; border-bottom: none; padding: 0.5ex 0.5em}
+	#page th {background: lightgray; text-align: center}
+	#page td a {color: black}
+        #page td.id, #page td.year {text-align: center}
+	#page div {text-align: center}
+//	#page div div {border: 1px solid red}
+	#page div div {display: inline-block; background: lightgray; width: 360px; vertical-align: top}
+        #page div div {margin: 1ex 0.5em; padding: 1ex 0.5em}
+        #page div div p {margin-bottom: 1ex}
+	#page div div p.cover {float: left; margin-right: 0.5em; padding-bottom: 4ex; background: silver}
+        #page div div p.cover span {display: block}
+	#page div div p.cover a {color: black; font-weight: bold}
+	#page div div p.title {font-size: 1.2em}
+        #page p.publisher, #page p.year {font-size: 0.8em}
+	nav.pages {background: gray; text-align: center; padding: 1ex 1em}
+	nav.pages a {background: lightgray; border-radius: 1ex; padding: 0.5ex 0.5em}
+	nav.pages a {line-height: 1.5em; color: black; font-weight: bold}
+	nav.pages a.current {background: white}
+	#status {background: lightgray; padding: 1ex 0.5em}
+</style>
+<script>
+/*=============================*/
+/* Основной объект приложения. */
+/*=============================*/
+var app = new Object ();
+app.version = "1.00";		// версия приложения
+app.title = undefined;		// заголовок вкладки в браузере
+app.collection = undefined;	// массив с библиографическими записями, загружаемый из файла collection.js
+app.collenotes = undefined;	// массив с исправлениями и дополнениями, загружаемый из файла collenotes.js
+app.index = undefined;		// массив, определяющий состав и порядок отображения записей
+app.idindex = undefined;	// индекс по упорядоченным идентификаторам
+app.viewMode = 1;		// режим отображения информации (0 - таблица, 1 - карточки)
+app.recPerPage = [24, 12];	// количество библиографических записей на странице в режимах таблицы и карточек
+app.curPage = undefined;	// текущая отображаемая страница
+app.selRecord = -1;		// номер выделенной записи
+app.warnings = new Array ();	// массив строк с предупреждениями о проблемах, обнаруженных при запуске
+/*=================================*/
+/* Подготовка к работе приложения. */
+/*=================================*/
+app.prepare = function () {
+	/* Проверка подключений */
+	if (app.collection == undefined)
+		window.alert ("Не удалось подключить коллецию библиографических записей из файла \"collection.js\".\n" + 
+				"Возможно, при добавлении очередной записи была нарушена структура этого файла.");
+	else {
+		if (app.title != undefined)
+                	window.document.title = app.title;
+		app.prepareCollection ();
+		/* Построение начального индекса и отображение страницы. */
+		app.rebuildIndex ();
+		app.showControlPanel ();
+		app.showPage ();
+		app.showPagesNavigation ();
+		app.selfcheck ();
+	}
+};
+/*=========================================================*/
+/* Подготовка коллекции:                                   */
+/* - назначение идентификаторов библиографическим записям, */
+/* - внесение исправлений и дополнений,                    */
+/* - составление списков отметок и фильтров.               */
+/* Замечание. Библиографические записи с пометкой «-»      */
+/*            пропускаются без обработки.                  */
+/*=========================================================*/
+app.prepareCollection = function () {
+	var sMarks, aTags, sTag, blank = "\t ", i, j, listids;
+	oMarks = new Object ();	// отметки
+	oTags = new Object ();	// теги
+        /* Обращение порядка записей в коллекции. */
+	app.collection.reverse ();
+        /* Назначение идентификаторов библиографическим записям */
+        /* и добавление важных отсутствующих полей.             */
+	for (i = 0; i < app.collection.length; i++) {
+		if (app.collection[i].id == "")
+			app.collection[i].id = String (i + 1);
+                if (app.collection[i].marks == undefined)
+                	app.collection[i].marks = "";
+                if (app.collection[i].tags == undefined)
+                	app.collection[i].tags = "";
+        }
+	/* Формирование индекса по упорядоченным идентификаторам. */
+	app.idindex = new Array (app.collection.length);
+        for (i = 0; i < app.collection.length; i++)
+        	app.idindex[i] = i;
+        app.idindex.sort (function (a, b) {
+		var ida = String (app.collection[a].id), idb = String (app.collection[b].id);
+                return ida == idb? 0: ida > idb? 1: -1;
+        });
+	/* Наложение дополнений и исправлений. */
+        try {
+	        if (app.collenotes != undefined) {
+	        	list = new Array ();
+                        for (i = 0; i < app.collenotes.length; i++) {
+				j = app.findRecordById (app.collenotes[i].id);
+				if (j != -1)
+                                        for (fld in app.collenotes[i])
+                                        	app.collection[j][fld] = app.collenotes[i][fld];
+                                else
+                                	list.push (app.collenotes[i].id);
+                        }
+                        if (list.length > 0) {
+                        	app.warnings.push ("*** ПРЕДУПРЕЖДЕНИЕ: не удалось применить некоторые исправления и дополнения " +
+                                "из файла collenotes.js из-за отстуствия в основной коллекции записей с идентификаторами:");
+                                app.warnings.push (list.join (", ") + ".");
+                        }
+                }
+        }
+        catch (e) {
+        	window.alert ("*** ОШИБКА *** Не удалось применить дополнения и исправления\n" +
+                	"из файла \"collenotes.js\":\n" + e);
+        }
+        /* Основной этап обработки. */
+	for (i = 0; i < app.collection.length; i++) {
+                /* Продолжение обработки. */
+		sMarks = app.collection[i].marks;
+		if (sMarks.indexOf ("-") == -1) {
+			aTags = app.collection[i].tags.split (",");
+			/* Сбор отметок. */
+			for (j = 0; j < sMarks.length; j++) {
+				c = sMarks.charAt (j);
+				if (blank.indexOf (c) == -1)
+					if (oMarks[c] == undefined)
+						oMarks[c] = 1;
+					else
+						oMarks[c]++;
+			}
+			/* Сбор тегов. */
+			for (j = 0; j < aTags.length; j++) {
+				sTag = aTags[j].trim ();
+				if (sTag != "")
+					if (oTags[sTag] == undefined)
+						oTags[sTag] = 1;
+					else
+						oTags[sTag]++;
+			}
+		}
+	}
+	/* Формирование массивов отметок и тегов на уровне приложения. */
+	app.marks = Object.keys (oMarks);
+	app.marks.sort ();
+	app.tags = Object.keys (oTags);
+	app.tags.sort ();
+};
+/*===================================================================================================*/
+/* Перестроение индекса библиографических записей в соответствии с настройками фильтра и сортировки. */
+/*===================================================================================================*/
+app.rebuildIndex = function () {
+	var i, n1, n2, elStatus = document.getElementById ("status"),
+        	ecMarks, elMarks = document.getElementById ("marks"),
+                ecTags, elTags = document.getElementById ("tags"),
+	        aMarks = new Array (), aTags = new Array ();
+	/*===========================================================================*/
+	/* Фильтрация записей коллекции, то есть исключение из состава отображаемых. */
+	/* Вызов: rec - объект записи коллекции.                                     */
+	/* Возврат: false - запись должна быть показана,                             */
+	/*          true - запись должна быть скрыта.                                */
+	/*===========================================================================*/
+	function filter (rec) {
+		var i, res = rec.marks.indexOf ("-") >= 0, n1 = aMarks.length, n2 = aTags.length, arTags;
+		/* Подсчёт совпадений с выбранными отметками marks. */
+                if (!res && n1 > 0)
+			for (i = 0; i < aMarks.length; i++)
+                        	if (rec.marks.indexOf (aMarks[i]) >= 0)
+                                	n1--;
+                /* Подсчёт совпадений с выбранными тегами tags. */
+                if (!res && n2 > 0) {
+                	arTags = rec.tags.split (",");
+                	for (i = 0; i < arTags.length; i++)
+                        	if (0 <= aTags.indexOf (arTags[i].trim ()))
+                                	n2--;
+                }
+                res = res || 0 < n1 + n2
+		return res;
+	}
+        /* Формирование массивов значений установленных фильтров. */
+	if (elMarks != null) {
+        	ecMarks = elMarks.getElementsByClassName ("selected");
+	        for (i = 0; i < ecMarks.length; i++)
+        		aMarks.push (ecMarks[i].firstChild.nodeValue);
+        }
+        if (elTags != null) {
+        	ecTags = elTags.getElementsByClassName ("selected");
+	        for (i = 0; i < ecTags.length; i++)
+        		aTags.push (ecTags[i].firstChild.nodeValue);
+        }
+	/* Формирование основного индекса. */
+	app.index = new Array ();
+	n1 = app.collection.length;
+	for (i = 0; i < n1; i++)
+		if (!filter (app.collection[i]))
+			app.index.push (i);
+	n2 = app.index.length;
+	/* Вывод информации в строку состояния. */
+	elStatus.replaceChild (document.createTextNode ("[" + app.version + "] Всего записей: " + n1 + ", показано: " + n2 + ", скрыто: " + (n1 - n2) + "."), elStatus.firstChild);
+	/* При старте приложения назначение последней страницы для отображения, */
+        /* а при изменениях фильтра — последней страницы. */
+	app.curPage = app.curPage == undefined? Math.floor ((n2 > 0? n2 - 1: 0) / app.recPerPage[app.viewMode]): 0;
+};
+/*====================================================================*/
+/* Быстрый поиск библиографической записи по значению идентификатора. */
+/* Вызов: id - идентификатор искомой записи.                          */
+/* Возврат: индекс найденного элемента массива collection или         */
+/*          -1, если запись не найдена.                               */
+/*====================================================================*/
+app.findRecordById = function (id) {
+	var l = -1, r = app.collection.length, m;
+        id = String (id);
+        /* Инвариант цикла: id < app.collection[app[idindex[r]].id */
+        while (0 < r && l < r) {
+        	m = ~~((l + r) / 2);
+                if (id < String (app.collection[app.idindex[m]].id))
+                	r = m;
+                else
+                	l = m + 1;
+	}
+        l = r - 1;
+        return 0 <= l && id == String (app.collection[app.idindex[l]].id)? app.idindex[l]: -1;
+};
+/*============================================*/
+/* Отображение панели управления приложением. */
+/*============================================*/
+app.showControlPanel = function () {
+	var i, el, elControl = document.getElementById ("control"),
+		picViewMode = app.viewMode == 0? new IAPicture ("collection.gif", 32, 32, 0, 0): new IAPicture ("collection.gif", 32, 32, 32, 0),
+		picSearch = new IAPicture ("collection.gif", 32, 32, 64, 0),
+                picList = new IAPicture ("collection.gif", 32, 32, 128, 0),
+		elViewMode = document.createElement ("a"),
+		elSearch = document.createElement ("a"),
+                elList = document.createElement ("a"),
+		elInput = document.createElement ("input"),
+		elMarks = document.createElement ("span"),
+		elTags = document.createElement ("div");
+	/*=============================================================*/
+	/* Поиск библиографической записи, содержащей указанный текст. */
+        /* Вызов: text - искомый текст,                                */
+        /*        start - номер записи, с которой осуществлять поиск.  */
+        /* Возврат: номер найденной записи или                         */
+        /*          -1, если запись не найдена.                        */
+	/*=============================================================*/
+	function findRecord (text, start) {
+        	var i = start == undefined? 0: start, found = false,
+                	rec, title, author;
+                text = text.toUpperCase ();
+		while (i < app.index.length && !found) {
+                	rec = app.collection[app.index[i]];
+                        title = rec.title.toUpperCase ();
+                        author = rec.author.toUpperCase ();
+                	if (0 <= title.indexOf (text) || 0 <= author.indexOf (text))
+				found = true;
+                        else
+                        	i++;
+                }
+                if (!found)
+                	i = -1;
+                return i;
+        }
+	/* Подготовка элемента кнопки переключения режимов отображения. */
+	elViewMode.appendChild (picViewMode.element ());
+	elViewMode.href = "#";
+	elViewMode.id = "picviewmode";
+	/* Подготовка элемента строки поиска. */
+	elInput.id = "fldsearch";
+	/*=========================================*/
+        /* Обработка ввода данных в строку поиска. */
+	/*=========================================*/
+	elInput.oninput = function () {
+		if (0 <= app.selRecord) {
+                	app.selRecord = -1;
+                        picSearch.slide (64, 0);
+			app.showPage ();
+                }
+        };
+	/*===========================================*/
+        /* Обработка нажатий клавиш в строке поиска. */
+	/*===========================================*/
+        elInput.onkeypress = function (event) {
+        	if (event.charCode == 13)
+	        	elSearch.onclick (elSearch);
+        }
+	/* Подготовка элемента кнопки поиска. */
+	elSearch.appendChild (picSearch.element ());
+	elSearch.href = "#";
+	elSearch.id = "picsearch";
+	/*=====================================*/
+        /* Обработка нажатия на кнопку поиска. */
+	/*=====================================*/
+	elSearch.onclick = function () {
+		app.selRecord = elInput.value == ""? -1: findRecord (elInput.value, app.selRecord + 1);
+                if (app.selRecord >= 0) {
+                	/* Запись найдена. */
+			app.curPage = Math.floor (app.selRecord / app.recPerPage[app.viewMode]);
+			picSearch.slide (96, 0);
+                }
+                else {
+                	/* Поиск завершился неудачей. */
+			app.selRecord = -1;
+                        picSearch.slide (64, 0);
+		}
+		app.showPage ();
+		app.showPagesNavigation ();
+		return false;	// отмена перехода по ссылке.
+        };
+        /* Подготовка элемента кнопки формирования списка. */
+	elList.appendChild (picList.element ());
+        elList.href = "#";
+        elList.id = "piclist";
+        /*==================================================*/
+        /* Обработка нажатия на кнопку формирования списка. */
+        /*==================================================*/
+        elList.onclick = function () {
+        	var i, w, refs = new Array ();
+		/*================================================================*/
+                /* Создание библиографической ссылки.                             */
+                /* Вызов: rec - объект, представляющий библиографическую запись.  */
+                /* Возврат: объект библиографической ссылки, содержащий два поля: */
+                /*          .id - идентификатор библиографической записи,         */
+                /*          .ref - строка с библиографической ссылкой.            */
+                /*================================================================*/
+                function createListLine (rec)
+                {
+                	var res = new Object (), a, authors, authors1, authors2, title, header, description,
+                        	regno, reginfo, hyperlink, i, n;
+			/*============================================================================*/
+			/* Формирование имени, в котором составные части идут в требуемом порядке.    */
+                        /* Вызов: name - имя в виде "Фамилия И. О." или "И. О. Фамилия",              */
+                        /*        place - часть заголовка, в которой предполагается использовать имя. */
+                        /* Возврат: "Фамилия, И. О." для place = 1, или                               */
+                        /*          "И. О. Фамилия", для place = 2.                                   */
+			/*============================================================================*/
+                        function rotateName (name, place)
+                        {
+				var res, part1, part2, n, p;
+				if (typeof name == "string" && name > "") {
+                                	n = name.length;
+                                	if (name[n - 1] == ".") {
+                                        	/* Фамилия И. О. */
+						p = name.indexOf (" ");
+                                                part1 = name.substr (0, p);
+                                                part2 = name.substr (p + 1).trim ();
+                                        }
+                                        else {
+                                        	/* И. О. Фамилия */
+                                                p = name.lastIndexOf (" ");
+                                                part1 = name.substr (p + 1);
+                                                part2 = name.substr (0, p).trim ();
+                                        }
+                                        res = place == 1? (part1 + ", " + part2): (part2 + " " + part1);
+                                }
+                                else
+                                	res = typeof name;
+				return res;
+                        }
+		        /*=====================================================*/
+		        /* Заполнено ли в записи указанное поле?               */
+		        /* Вызов: fieldName - имя поля.                        */
+                        /* Возврат: true - поле заполнено,                     */
+                        /*          false - поле отсутствует или не заполнено. */
+		        /*=====================================================*/
+		        function recordHasField (fieldName)
+                        {
+                	        return rec[fieldName] != undefined && rec[fieldName] != "";
+                        }
+			/*===========================================================*/
+                        /* Получение значение поля записи или значения по умолчанию. */
+                        /* Вызов: fieldName - имя поля,                              */
+                        /*        defaultValue - значение по умолчанию.              */
+			/*===========================================================*/
+                        function recordFieldValue (fieldName, defaultValue)
+                        {
+                        	return rec[fieldName] != undefined && rec[fieldName] != ""?
+                                	rec[fieldName]: defaultValue;
+                        }
+                        res.id = rec.id;
+                        if (recordHasField ("ref"))
+                        	/* Использование явно указанной библиографической ссылки. */
+	                        res.ref = rec.ref;
+                        else {
+			        /* Формирование заголовка из названия и авторов. */
+			        title = recordHasField ("title")? rec.title: "БЕЗ НАЗВАНИЯ";
+			        if (recordHasField ("author")) {
+				        authors = rec.author.split (",");
+                                        for (i = 0; i < authors.length; i++)
+                                	        authors[i] = authors[i].trim ();
+                                }
+                                else
+				        authors = "";
+				n = authors.length
+                                if (0 == n) {
+                                        /* Автор не указан. */
+                                        header = title;
+                                } else if (4 > n) {
+                                        /* Указано от 1 до 3 авторов. */
+                                        authors1 = rotateName (authors[0], 1);
+                                        a = new Array ();
+                                        for (i = 0; i < n; i++)
+                                        	a.push (rotateName (authors[i], 2));
+                                        authors2 = a.join (", ");
+                                        header = authors1 + " " + title + " / " + authors2;
+                                }
+                                else {
+                                        /* Указано 4 и более авторов. */
+                                        a = new Array ();
+                                        for (i = 0; i < 3; i++)
+                                        	a.push (rotateName (authors[i], 2));
+                                        authors2 = a.join (", ");
+                                        header = title + " / " + authors2 + " [и др.]";
+                                }
+				a = authors = undefined;
+			        /* Формирование частей, специфичных для типа издания. */
+                                if (recordHasField ("issue"))
+                                	/* Сведения о статье в периодическом издании. */
+					description = " // " + recordFieldValue ("publisher", "НЕТ НАЗВАНИЯ ЖУРНАЛА") + " .– " +
+                                        	recordFieldValue ("year", "НЕТ ГОДА") + " .– " +
+                                                (recordHasField ("volume")? "Т. " + rec.volume + ", ": "") +
+                                                "№" + rec.issue + " .– " +
+                                                "С. " + recordFieldValue ("pages", "НЕТ СТРАНИЦ") + ".";
+                                else
+                                	/* Сведения о книге. */
+                                	description = ". – " + (recordHasField ("volume")? "Том " + rec.volume + ". – " : "")+
+                                        	recordFieldValue ("city", "НЕТ ГОРОДА") + ": " +
+	                                        recordFieldValue ("publisher", "НЕТ НАЗВАНИЯ ИЗДАТЕЛЬСТВА") + ", " +
+                                                recordFieldValue ("year", "НЕТ ГОДА") + ". – " +
+                                                recordFieldValue ("pages", "НЕТ СТРАНИЦ") + " с.";
+				regno = new Array ();
+                                if (recordHasField ("EDN"))
+                                	regno.push ("EDN: " + rec.EDN);
+                                if (recordHasField ("DOI"))
+                                	regno.push ("DOI: " + rec.DOI);
+				reginfo = regno.length > 0? " " + regno.join (". ") : "";
+                                if (recordHasField ("href"))
+                                	hyperlink = " – URL: " + rec.href + " (дата обращения: " +
+                                        	recordFieldValue ("found", "НЕТ ДАТЫ") + ").";
+                                else
+                                	hyperlink = "";
+                                res.ref = header + description + reginfo + hyperlink;
+			}
+                        return res;
+                }
+                /* Формирование списка библиографических ссылок. */
+                for (i = 0; i < app.index.length; i++)
+			refs.push (createListLine (app.collection[app.index[i]]));
+                /* Сортировка сформированного списка. */
+                refs.sort (function (a, b) {
+                	return a.ref > b.ref? 1: a.ref < b.ref? -1: 0;
+                });
+                /* Вывод списка на отдельную вкладку в браузере. */
+                w = window.open ("");
+		w.document.title = "Библиографический список";
+                for (i = 0; i < refs.length; i++)
+			w.document.writeln ((i + 1) + "(" + refs[i].id + "). " + refs[i].ref + "<br>");
+                w.document.writeln ("*** Записей в списке: " + refs.length + ". ***");
+                return false;	// отмена перехода по ссылке.
+        }
+        /* Подготовка элемента фильтра по отметкам. */
+	elMarks.id = "marks";
+	for (i = 0; i < app.marks.length; i++) {
+		el = document.createElement ("a");
+		el.href = "#";
+		el.appendChild (document.createTextNode (app.marks[i]));
+		/*======================================*/
+		/* Обработка нажатия на кнопку отметки. */
+		/* Вызов: event - объект события.       */
+		/*======================================*/
+		el.onclick = function (event) {
+			var el = event.srcElement;
+			/* Сброс параметров поиска. */
+			if (app.selRecord != -1) {
+                        	/* elInput.value = ""; */
+                                picSearch.slide (64, 0);
+                                app.selRecord = -1;
+			}
+                        /* Включение/выключение фильтра по отметке. */
+		        el.classList.toggle ("selected");
+		        app.rebuildIndex ();
+		        app.showPage ();
+                        app.showPagesNavigation ();
+			return false;	// отмена перехода по ссылке
+		}
+		elMarks.appendChild (el);
+	}
+	/* Подготовка элемента фильтра по тегам. */
+	elTags.id = "tags";
+	for (i = 0; i < app.tags.length; i++) {
+		el = document.createElement ("a");
+		el.href = "#";
+		el.appendChild (document.createTextNode (app.tags[i]));
+		/*===================================*/
+		/* Обработка нажатия на кнопку тега. */
+		/* Вызов: event - объект события.    */
+		/*===================================*/
+		el.onclick = function (event) {
+			var el = event.srcElement;
+			/* Сброс параметров поиска. */
+			if (app.selRecord != -1) {
+                        	/* elInput.value = ""; */
+                                picSearch.slide (64, 0);
+                                app.selRecord = -1;
+			}
+			/* Включение/выключение фильтра по тегу. */
+			el.classList.toggle ("selected");
+		        app.rebuildIndex ();
+		        app.showPage ();
+                        app.showPagesNavigation ();
+			return false;	// отмена перехода по ссылке
+		}
+		elTags.appendChild (el);
+		elTags.appendChild (document.createTextNode (" "));
+	}
+	/* Удаление дочерних элементов. */
+	while (elControl.lastChild)
+		elControl.removeChild (elControl.lastChild);
+	/* Добавление элементов управления. */
+	elControl.appendChild (elViewMode);
+	elControl.appendChild (elMarks);
+        elControl.appendChild (elList);
+	elControl.appendChild (elSearch);
+	elControl.appendChild (elInput);
+	elControl.appendChild (elTags);
+	/* Настройка обработчиков событий. */
+	/*===============================================================*/
+	/* Обработка нажатия на кнопку переключения режимов отображения. */
+	/*===============================================================*/
+	elViewMode.onclick = function () {
+		var rn = app.curPage * app.recPerPage[app.viewMode];	// номер первой записи на отображаемой странице
+		/* Переключение режима отображения. */
+		app.viewMode = 1 - app.viewMode;
+		/* Пересчёт номера текущей страницы. */
+		app.curPage = Math.floor (rn / app.recPerPage[app.viewMode]);
+		/* Изменение вида кнопки переключения режимов. */
+		if (app.viewMode == 1)
+			picViewMode.slide (32, 0);
+		else
+			picViewMode.slide (0, 0);
+		/* Обновление содержимого экрана. */
+		app.showPage ();
+		app.showPagesNavigation ();
+		return false;	// запрет перехода по ссылке
+	}
+};
+/*=============================================================*/
+/* Отображение текущей страницы с библиографическими записями. */
+/*=============================================================*/
+app.showPage = function () {
+	/*==================================================================*/
+	/* Создание HTML-элемента с информацией о библиографической записи. */
+	/* Вызов: rec - объект библиографической записи,                    */
+        /*        sel - признак выделения записи.                           */
+	/* Возврат: HTML-элемент библиографической записи.                  */
+	/*==================================================================*/
+	function createRecordElement (rec, sel) {
+		var i, fields = ["id", "title", "author", "year"], el, pic, elPic, elRecord, elField;
+		/*==========================================*/
+		/* Общая нормализация значения поля записи. */
+		/* Вызов: v - значение для нормализации.    */
+		/* Возврат: нормализованное значение.       */
+		/*==========================================*/
+		function fieldValue (v) {
+			return typeof v == "string" && v != ""? v: "\u00a0";	// "\u00a0" == "&nbsp;"
+		}
+		/*========================================================================*/
+		/* Создание HTML-элемента, представляющего поле библиографической записи. */
+                /* Вызов: elHtmlTag - HTML-тег элемента,                                  */
+                /*        elHtmlClass - HTML-класс элемента,                              */
+                /*        elValue - значение элемента,                                    */
+		/*        elHref - значение гиперссылки (может отсутствовать).            */
+		/* Возврат: HTML-элемент с классом elHtmlClass и значением elValue,       */
+                /*          при щелчке по которому осуществляется переход по гиперссылке. */
+		/*========================================================================*/
+                function createFieldElement (elHtmlTag, elHtmlClass, elValue, elHref)
+                {
+			var elField, elAnchor;
+                        if (elHtmlTag != "") {
+	                        elField = document.createElement (elHtmlTag);
+                                if (elHtmlClass != "")
+                        	        elField.classList.add (elHtmlClass);
+                        }
+                        else
+                        	elField = null;
+			if (elHref != undefined && elHref != "") {
+                        	elAnchor = document.createElement ("a");
+                                elAnchor.href = elHref;
+                                elAnchor.target = "_blank";
+                                elAnchor.appendChild (document.createTextNode (elValue));
+				if (elField != null)
+	                                elField.appendChild (elAnchor);
+                                else {
+                                	/* Создаётся только гиперссылка без обрамляющего тега. */
+                                	if (elHtmlClass != "")
+                                        	elAnchor.classList.add (elHtmlClass);
+                                	elField = elAnchor;
+                                }
+                        }
+                        else
+                        	elField.appendChild (document.createTextNode (elValue));
+                        return elField;
+                }
+		/*============================*/
+                /* Является ли запись пустой. */
+		/*============================*/
+                function isEmptyRec ()
+                {
+                	return rec.id == undefined || rec.id == "";
+                }
+		/*=====================================================*/
+		/* Заполнено ли в записи указанное поле?               */
+		/* Вызов: fieldName - имя поля.                        */
+                /* Возврат: true - поле заполнено,                     */
+                /*          false - поле отсутствует или не заполнено. */
+		/*=====================================================*/
+		function recordHasField (fieldName)
+                {
+                	return rec[fieldName] != undefined && rec[fieldName] != "";
+                }
+		if (app.viewMode == 0) {
+			/* Режим таблицы, информация о библиографической записи должна быть представлена строкой. */
+			elRecord = document.createElement ("tr");
+			/* Идентификатор записи. */
+			elRecord.appendChild (createFieldElement ("td", "id", fieldValue (rec.id),
+                        	recordHasField ("path")? rec.path: ""));
+			/* Название. */
+			elField = createFieldElement ("td", "title", recordHasField ("issue")?
+                       		fieldValue (rec.title) + (recordHasField ("publisher")? " // " + fieldValue (rec.publisher): "")
+                                : fieldValue (rec.title));
+                        if (recordHasField ("href")) {
+				el = createFieldElement ("", "", ">>>", rec.href);
+                                elField.appendChild (el);
+			}
+                        elRecord.appendChild (elField);
+			/* Автор. */
+			elRecord.appendChild (createFieldElement ("td", "author", fieldValue (rec.author)));
+                        /* Год и номер выпуска. */
+			elRecord.appendChild (createFieldElement ("td", "year",
+                        	recordHasField ("issue")? fieldValue (rec.year) + " (" + rec.issue + ")":
+                                fieldValue (rec.year)));
+		}
+		else {
+			/* Режим карточки, информация о библиографической записи должна быть представлена блоком. */
+			elRecord = document.createElement ("div");
+                        /* Добавление оболожки. */
+			elField = document.createElement ("p");
+                        elField.classList.add ("cover");
+                        /* Выбор типа обложки. */
+                        if (!recordHasField ("id")) {
+                        	/* Пустая запись. */
+                        	pic = new IAPicture ("collection.gif", 76, 100, 0, 56);
+                                el = pic.element ();
+                        }
+                        else {
+			        if (recordHasField ("cover")) {
+                        	        /* Будет использоваться обложка из файла. */
+                        	        el = document.createElement ("img");
+                                        el.src = rec.cover;
+                                        el.width = 76;
+                                        el.height = 100;
+				        elPic = document.createElement ("span");
+                                        elPic.appendChild (el);
+                                }
+                                else {
+                        	        /* Будет использован шаблон обложки книги, статьи ("issue") или интернет-ресурса ("href"). */
+                                        /* При наличии пути к локальному файлу "path" выбирается изображение со стрелкой. */
+	                                pic = new IAPicture ("collection.gif", 76, 100,
+                                        	(recordHasField ("href")? 380: recordHasField ("issue")? 228: 76) + (recordHasField ("path")? 76: 0), 32);
+                        	        elPic = pic.element ();
+                                }
+                                if (recordHasField ("path")) {
+                        	        /* Изображение обложки превращается в ссылку для доступа к файлу источника. */
+				        el = document.createElement ("a");
+                                        el.href = rec.path;
+                                        el.target = "_blank";
+                                        el.appendChild (elPic);
+                                }
+                                else
+                        	        /* Обложка используется просто как статическое изображение. */
+				        el = elPic;
+                        }
+                        elField.appendChild (el);
+			/* Идентификатор записи. */
+			elField.appendChild (createFieldElement ("span", "id", fieldValue (rec.id)));
+                        /* Отметки marks. */
+			elField.appendChild (createFieldElement ("span", "marks", fieldValue (rec.marks)));
+                        /* Гиперссылка. */
+                        elField.appendChild (recordHasField ("href")?
+                                createFieldElement ("span", "href", ">>>", rec.href):
+                                createFieldElement ("span", "href", "\u00a0"));
+                        elRecord.appendChild (elField);
+                        /* Добавление названия. */
+			elRecord.appendChild (createFieldElement ("p", "title", fieldValue (rec.title)));
+                        /* Добавление автора. */
+			elRecord.appendChild (createFieldElement ("p", "author", fieldValue (rec.author)));
+			/* Добавление сведений об издании. */
+			elRecord.appendChild (createFieldElement ("p", "publisher",
+                        	recordHasField ("issue")?
+                                	fieldValue (rec.publisher):
+                                        (recordHasField ("city") || recordHasField ("publisher")?
+                                        	fieldValue (rec.city) + ", " + fieldValue (rec.publisher): "")
+                        ));
+                        /* Добавление года издания. */
+                        elRecord.appendChild (createFieldElement ("p", "year", recordHasField ("issue")?
+                        	fieldValue (rec.year) + " (" + rec.issue + ")": fieldValue (rec.year)));
+		}
+                /* Выделение созданной записи при необходимости. */
+                if (sel)
+                	elRecord.classList.add ("selected");
+		return elRecord;
+	}
+	var i, elPage = document.getElementById ("page"), elContainer, firstRec = app.recPerPage[app.viewMode] * app.curPage, lastRec = firstRec + app.recPerPage[app.viewMode];
+	/* Подготовка HTML-контейнера для информации о библиографических записях. */
+	if (app.viewMode == 0) {
+		var headers = ["Ид", "Название", "Автор", "Год<br>(вып)"], elRow, elCell;
+		elContainer = document.createElement ("table");
+		elRow = document.createElement ("tr");
+		for (i in headers) {
+			elCell = document.createElement ("th");
+			// elCell.appendChild (document.createTextNode (headers[i]));
+                        elCell.innerHTML = headers[i];
+			elRow.appendChild (elCell);
+		}
+		elContainer.appendChild (elRow);
+	}
+	else
+		elContainer = document.createElement ("div");
+	/* Наполнение HTML-контейнера библиографическими записями. */
+	for (i = firstRec; i < lastRec; i++)
+		elContainer.appendChild (createRecordElement (i < app.index.length? app.collection[app.index[i]]: {}, i == app.selRecord));
+	/* Замена старого контейнера новым на HTML-странице. */
+	elPage.replaceChild (elContainer, elPage.firstChild);
+};
+/*==============================================*/
+/* Отображение областей постраничной навигации. */
+/*==============================================*/
+app.showPagesNavigation = function () {
+	var i, el, aPageNavBars, nPages = 1 + Math.floor ((app.index.length > 0? app.index.length - 1: 0) / app.recPerPage[app.viewMode]);
+	/*======================================================*/
+	/* Получение элементов постраничной навигации.          */
+	/* Возврат: коллекция элементов постраничной навигации. */
+	/*======================================================*/
+	function getPageNavigationBars () {
+		var i, a = new Array (), elNav = document.getElementsByTagName ("nav");
+		for (i = 0; i < elNav.length; i++)
+			if (elNav[i].classList.contains ("pages"))
+				a.push (elNav[i]);
+		return a;
+	}
+	/*============================================*/
+	/* Обработчик щелчка по навигационной панели. */
+	/* Вызов: event - объект события.             */
+	/*============================================*/
+	function goPage (event) {
+		var i, oldCurPage, newCurPage, el = event.srcElement;
+		if (el.tagName == "A") {
+			oldCurPage = app.curPage;
+			newCurPage = el.hash.substr (1) - 1;
+			if (oldCurPage != newCurPage) {
+				for (i = 0; i < aPageNavBars.length; i++) {
+					/* Умножение на 2 требуется в связи с наличием Text Node между Anchor. */
+					aPageNavBars[i].childNodes[oldCurPage * 2].classList.remove ("current");
+					aPageNavBars[i].childNodes[newCurPage * 2].classList.add ("current");
+				}
+				app.curPage = newCurPage;
+				app.showPage ();
+			}
+		}
+		return false;	// отмена перехода по ссылке
+	}
+	aPageNavBars = getPageNavigationBars ();
+	/* Может быть несколько областей навигации. */
+	for (i = 0; i < aPageNavBars.length; i++) {
+		elNavBar = aPageNavBars[i];
+		/* Отключение обработчика нажатий. */
+		elNavBar.onclick = null;
+		/* Удаление дочерних элементов: https://stackoverflow.com/questions/3955229/remove-all-child-elements-of-a-dom-node-in-javascript */
+		while (elNavBar.lastChild)
+			elNavBar.removeChild (elNavBar.lastChild);
+		/* Добавление навигационных элементов. */
+		for (j = 1; j <= nPages; j++) {
+			el = document.createElement ("a");
+			el.href = "#" + j;
+			el.appendChild (document.createTextNode (j));
+			if (j == app.curPage + 1)
+				el.classList.add ("current");
+			elNavBar.appendChild (el);
+			elNavBar.appendChild (document.createTextNode (" "));
+		}
+		/* Подключение обработчика нажатий. */
+		elNavBar.onclick = goPage;
+	}
+};
+/*==========================================*/
+/* Проверка готовности приложения к работе. */
+/*==========================================*/
+app.selfcheck = function () {
+	var list, id1, id2;
+        /* Проверка уникальности идентификаторов и формирование массива дубликатов. */
+        list = new Array ();
+        if (1 < app.idindex.length) {
+		id1 = String (app.collection[app.idindex[0]].id);
+                for (i = 1; i < app.idindex.length; i++) {
+			id2 = String (app.collection[app.idindex[i]].id);
+		        if (id2 == id1) {
+                        	if (list.length == 0 || list[list.length - 1] != id2)
+                                	list.push (id2);
+                        }
+                        id1 = id2;
+                }
+        }
+        if (list.length > 0) {
+		app.warnings.push ("*** ПРЕДУПРЕЖДЕНИЕ: В коллекции есть записи с дублирующимися идентификаторами:");
+                app.warnings.push ("\t" + list.join (", ") + ".");
+        }
+        /* Планирование вывода предупреждения после отображения интерфейса приложения. */
+        if (app.warnings.length > 0)
+        	window.setTimeout (function () {
+                	window.alert (app.warnings.join ("\n"));
+                        app.warnings = undefined;
+                }, 500);
+};
+/*=========================================================*/
+/* Конструктор объекта "картинка из набора".               */
+/* Вызов: src - путь к файлу, содержащему набор картинок,  */
+/*        w, h - ширина и высота картинки,                 */
+/*        x, y - координаты левого верхнего угла картинки. */
+/*=========================================================*/
+function IAPicture (src, w, h, x, y) {
+	var elSpan = document.createElement ("span"), elImg = document.createElement ("img");
+	/* Настройка элемента image, представляющего набор картинок. */
+	elImg.src = src;
+	elImg.style.position = "relative";
+	elImg.style.left = x != undefined? -x + "px": 0;
+	elImg.style.top = y != undefined? -y + "px": 0;
+	elImg.ondragstart = function () { return false; }
+	/* Настройка элемента span, являющегося контейнером и рамкой для элемента image. */
+	elSpan.classList.add ("IAPicture");
+	elSpan.style.display = "inline-block";
+	elSpan.style.width = w + "px";
+	elSpan.style.height = h + "px";
+	elSpan.style.overflow = "hidden";
+	elSpan.style.visibility = "visible";
+	elSpan.appendChild (elImg);
+	/* Настройка созданного объекта. */
+	this.elSpan = elSpan;
+	this.elImg = elImg;
+	/*====================================================================*/
+	/* Метод получения HTML-элемента с картинкой для вставки на страницу. */
+	/* Возврат: HTML-элемент.                                             */
+	/*====================================================================*/
+	this.element = function () {
+		return this.elSpan;
+	};
+	/*===================================================================================*/
+	/* Метод, позволяющий передвинуть рамку относительно изображения с набором картинок. */
+	/* Вызов: x, y - новые координаты левого верхнего угла картинки.                     */
+	/*===================================================================================*/
+	this.slide = function (dx, dy) {
+		this.elImg.style.left = -dx + "px";
+		this.elImg.style.right = -dy + "px";
+	}
+	return this;
+}
+/*====================*/
+/* Запуск приложения. */
+/*====================*/
+window.onload = function () {
+	app.prepare ();
+};
+</script>
+<script src="collection.js" type="text/javascript" charset="utf-8"></script>
+<script src="collenotes.js" type="text/javascript" charset="utf-8"></script>
+</head>
+<body>
+<div id="control"><!-- Панель управления -->
+&nbsp;
+</div>
+<nav class="pages"><!-- Область постраничной навигации -->
+&nbsp;
+</nav>
+<div id="page"><!-- Область для отображения списка источников -->
+</div><!-- id="page" -->
+<nav class="pages"><!-- Область постраничной навигации -->
+&nbsp;
+</nav>
+<div id="status"><!-- Строка состояния -->
+&nbsp;
+</div><!-- id="status" -->
+</body>
+</html>
